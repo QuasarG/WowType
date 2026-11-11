@@ -363,3 +363,39 @@ mod tests {
         assert_eq!(lm.top_next("明天", 1)[0].0, "见");
     }
 }
+
+#[cfg(test)]
+mod predict_probe {
+    use crate::lm::load_lm;
+    use crate::{Engine, MemoryLexicon};
+    use std::sync::Arc;
+    use std::time::Instant;
+
+    /// 诊断用：真机词库＋words.lm＋NNLM，看联想质量和耗时。
+    #[test]
+    #[ignore]
+    fn probe_engine_predict() {
+        let lex = MemoryLexicon::from_tsv_path_cached("/usr/share/wowtype/lexicon.tsv")
+            .expect("lexicon");
+        let lm = load_lm("/usr/share/wowtype/words.lm").expect("words.lm");
+        let engine = Engine::new(Arc::new(lex), lm);
+        if engine
+            .load_nnlm("/home/zexin/.local/share/wowtype/wetype/nlrgpt2_nnlm.bin")
+            .is_err()
+        {
+            eprintln!("（无 NNLM，纯 lift 排序）");
+        }
+        for (ctx, prev) in [
+            ("今晚吃了个饭，我", "我"),
+            ("谢谢你帮我", "我"),
+            ("我们明天", "明天"),
+            ("很高兴认识", "你"),
+        ] {
+            engine.set_context(ctx);
+            let t = Instant::now();
+            let top = engine.predict_next(prev, 8);
+            let words: Vec<&str> = top.iter().map(|(w, _)| w.as_str()).collect();
+            println!("[{:>4.1}ms] {ctx:?} | {prev} → {}", t.elapsed().as_secs_f64() * 1000.0, words.join(" "));
+        }
+    }
+}

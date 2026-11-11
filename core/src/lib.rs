@@ -631,7 +631,9 @@ impl Engine {
     /// 基于上一词的候选预测（「预测词库」）。
     ///
     /// 返回 (词, 对数概率)，按概率降序。语言模型没接入预测能力时返回空。
-    /// 预测也走学习层：通用搭配打底，叠加用户的私人习惯。
+    /// 预测走学习层（通用搭配＋用户私人习惯）；有字级神经模型时再重排：
+    /// bigram 只负责提议（宽召回），神经模型看得到更长的上下文、按绝对
+    /// 流畅度排序——治「搭配提升封顶并列、生僻语料词顶到最前」的排序病。
     pub fn predict_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
         let pairs = match self.pairs.read() {
             Ok(pairs) => pairs,
@@ -643,7 +645,33 @@ impl Engine {
             start: None,
             at_ms: now_ms(),
         };
-        lm.top_next(prev, limit)
+        let model = self.nnlm.read().ok().and_then(|m| m.clone());
+        // 重排池：显示量的三倍、上限 24——实测 24 个候选约 35ms（release），
+        // 召回够宽又不至于拖慢上屏后的响应。
+        let fetch = if model.is_some() {
+            limit.saturating_mul(3).min(24)
+        } else {
+            limit
+        };
+        let mut items = lm.top_next(prev, fetch);
+        if let Some(model) = model {
+            if items.len() > 1 {
+                let context = model.context_tokens(&self.context());
+                for (word, score) in items.iter_mut() {
+                    let chars = word.chars().count().max(1) as f64;
+                    // 每字平均流畅度（长度中立）；lift 只当四分之一权重的先验。
+                    let fluency = model.score(&context, word) / chars;
+                    *score = fluency + *score * 0.25;
+                }
+                items.sort_by(|a, b| {
+                    b.1.partial_cmp(&a.1)
+                        .unwrap_or(std::cmp::Ordering::Equal)
+                        .then_with(|| a.0.cmp(&b.0))
+                });
+            }
+        }
+        items.truncate(limit);
+        items
     }
 
     /// 用最近上屏的内容预测下一词（联想）。
