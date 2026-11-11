@@ -193,14 +193,6 @@ fn expand_weak_v_inplace(s: &mut String) {
     }
 }
 
-/// l/n 后的 ue 即 üe：lüe/nüe 在键盘上常打作 lue/nue（正词法难敲 ü），
-/// 主流输入法都收这对弱拼写。改写是纯字母替换，隔音符不受影响。
-fn expand_weak_v_inplace(s: &mut String) {
-    if s.contains("lue") || s.contains("nue") {
-        *s = s.replace("lue", "lve").replace("nue", "nve");
-    }
-}
-
 impl Engine {
     pub fn new(lexicon: Arc<dyn Lexicon>, lm: Arc<dyn LanguageModel>) -> Self {
         let merged = Arc::new(UserLexicon::new(lexicon.clone()));
@@ -652,6 +644,17 @@ impl Engine {
             at_ms: now_ms(),
         };
         lm.top_next(prev, limit)
+    }
+
+    /// 用最近上屏的内容预测下一词（联想）。
+    ///
+    /// 引擎自己取光标前的末词做 prev（整句上屏取它的末词，如「我发给你」→「你」）；
+    /// 刚上屏的是标点、或上下文对不上时返回空。
+    pub fn predict_from_context(&self, limit: usize) -> Vec<(String, f64)> {
+        match self.start_word() {
+            Some(prev) => self.predict_next(&prev, limit),
+            None => Vec::new(),
+        }
     }
 
     pub fn input(&self, raw: &str) -> Vec<Candidate> {

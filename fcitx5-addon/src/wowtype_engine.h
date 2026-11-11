@@ -190,6 +190,7 @@ FCITX_CONFIGURATION(
                              fcitx::KeyConstrainFlag::AllowModifierLess})};
     fcitx::Option<bool> voiceCopy{this, "VoiceCopy", "语音识别的结果同时复制到剪贴板", false};
     fcitx::Option<bool> emojiSuggest{this, "EmojiSuggest", "打字时推荐 emoji", true};
+    fcitx::Option<bool> predict{this, "Predict", "上屏后联想下一个词", true};
     fcitx::Option<fcitx::Key, fcitx::KeyConstrain> emojiKey{
         this, "EmojiKey", "打开表情面板的快捷键", fcitx::Key("Super+period"),
         fcitx::KeyConstrain(fcitx::KeyConstrainFlags{fcitx::KeyConstrainFlag::AllowModifierLess})};
@@ -269,6 +270,11 @@ public:
     void sendPreedit(fcitx::InputContext *ic, const fcitx::Text &preedit);
     /// 编辑区画在应用的输入框里（应用支持、全局设置也开着）。
     bool inlinePreedit(fcitx::InputContext *ic) const;
+    /// 上屏后刷新联想词（不组词时显示在候选条，点选/数字键直接上屏）。
+    void showPredictions(fcitx::InputContext *ic, WowtypeState *state);
+    /// 上屏一个联想词，然后接着联想下一个（链式）。
+    void commitPrediction(fcitx::InputContext *ic, WowtypeState *state,
+                          const std::string &word);
     /// 选中第 index 个候选（全局下标）：整句候选直接上屏，
     /// 句首词候选先压进已选栈，剩下的拼音继续输入。
     void commitCandidate(fcitx::InputContext *ic, WowtypeState *state,
@@ -425,6 +431,7 @@ private:
     // 生效中的设置（配置文件 + 环境变量覆盖）
     bool horizontal_ = true;
     std::size_t pageSize_ = 9;
+    bool predict_ = true;
     bool fuzzy_ = false;
     /// 打开的模糊音分组（位掩码，见 wowtype_engine_set_fuzzy_groups）。
     unsigned fuzzyGroups_ = 0;

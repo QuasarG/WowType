@@ -224,6 +224,43 @@ pub unsafe extern "C" fn wowtype_engine_predict_next(
     }
 }
 
+/// 用最近上屏的内容预测下一词（联想）：引擎自己取光标前的末词做 prev。
+///
+/// 成功返回候选集合句柄（text 是预测词，score 是对数概率），
+/// 失败返回 NULL；结果同样用 wowtype_candidates_free 释放。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_predict_from_context(
+    engine: *const WowtypeEngineHandle,
+    limit: usize,
+) -> *mut WowtypeCandidates {
+    let outcome = panic::catch_unwind(panic::AssertUnwindSafe(|| {
+        if engine.is_null() {
+            set_last_error("engine is null");
+            return ptr::null_mut();
+        }
+        let items = unsafe { &*engine }.engine.predict_from_context(limit);
+        let mut texts = Vec::with_capacity(items.len());
+        let mut scores = Vec::with_capacity(items.len());
+        for (word, score) in items {
+            match CString::new(word) {
+                Ok(text) => {
+                    texts.push(text);
+                    scores.push(score);
+                }
+                Err(_) => continue,
+            }
+        }
+        Box::into_raw(Box::new(WowtypeCandidates::plain(texts, scores)))
+    }));
+    match outcome {
+        Ok(candidates) => candidates,
+        Err(_) => {
+            set_last_error("panic in wowtype_engine_predict_from_context");
+            ptr::null_mut()
+        }
+    }
+}
+
 /// 记录一次选词，用于历史特征。返回 0 表示成功。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_record_selection(

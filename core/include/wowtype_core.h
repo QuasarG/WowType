@@ -168,6 +168,13 @@ WowtypeCandidates *wowtype_engine_predict_next(const WowtypeEngineHandle *engine
                                                const char *prev_word,
                                                size_t limit);
 
+/**
+ * 用最近上屏的内容预测下一词（联想）：引擎自己取光标前的末词做 prev。
+ * 刚上屏的是标点/没有可靠上文时返回空集合。
+ */
+WowtypeCandidates *wowtype_engine_predict_from_context(const WowtypeEngineHandle *engine,
+                                                        size_t limit);
+
 /* 候选数量。 */
 size_t wowtype_candidates_len(const WowtypeCandidates *candidates);
 

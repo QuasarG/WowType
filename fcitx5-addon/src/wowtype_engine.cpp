@@ -360,6 +360,24 @@ private:
     std::size_t index_;
 };
 
+/// 联想词候选：点选或数字键直接上屏，然后接着联想下一个（链式）。
+class WowtypePredictWord final : public fcitx::CandidateWord {
+public:
+    WowtypePredictWord(WowtypeEngine *engine, WowtypeState *state,
+                       const std::string &text)
+        : engine_(engine), state_(state) {
+        setText(fcitx::Text(text));
+    }
+
+    void select(fcitx::InputContext *inputContext) const override {
+        engine_->commitPrediction(inputContext, state_, text().toString());
+    }
+
+private:
+    WowtypeEngine *engine_;
+    WowtypeState *state_;
+};
+
 /// 展开面板的一行（一行里有好几个词）。
 class WowtypeGridRow final : public fcitx::CandidateWord {
 public:
@@ -502,6 +520,9 @@ public:
     bool afterDigit_ = false;
     /// emit 上屏次数，用来判断一次按键有没有自己上屏东西。
     unsigned emits_ = 0;
+    /// 上屏后的联想词（不组词时显示在候选条，点选/数字键直接上屏）。
+    std::vector<std::string> predictions_;
+    bool predicting() const { return !predictions_.empty(); }
 
     /// 全部原始输入（包括已经选过词的部分）。
     std::string input() const { return wowtype_session_input(session_); }
@@ -534,6 +555,7 @@ public:
         wowtype_session_reset(session_, 0);
         candidates_.clear();
         candGeneration_ = UINT64_MAX;
+        predictions_.clear();
         expanded_ = false;
         gridCursor_ = 0;
         panelPage_ = 0;
@@ -874,6 +896,7 @@ void WowtypeEngine::applyConfig() {
     }
     traditional_ = envOr("WOWTYPE_TRADITIONAL", *config_.traditional);
     emojiSuggest_ = envOr("WOWTYPE_EMOJI", *config_.emojiSuggest);
+    predict_ = envOr("WOWTYPE_PREDICT", *config_.predict);
     emojiKey_ = *config_.emojiKey;
 
     // 语音热键：WOWTYPE_VOICE_KEY（fcitx 键名，如 Alt_R、Control_R、F8）优先，none 关掉
@@ -1098,12 +1121,47 @@ void WowtypeEngine::rememberContext(const std::string &text) {
     }
 }
 
+void WowtypeEngine::showPredictions(fcitx::InputContext *ic, WowtypeState *state) {
+    state->predictions_.clear();
+    if (predict_ && coreReady()) {
+        if (WowtypeCandidates *raw =
+                wowtype_engine_predict_from_context(core_, pageSize_)) {
+            const std::size_t count = wowtype_candidates_len(raw);
+            for (std::size_t i = 0; i < count; ++i) {
+                if (const char *text = wowtype_candidates_text(raw, i)) {
+                    state->predictions_.emplace_back(text);
+                }
+            }
+            wowtype_candidates_free(raw);
+        }
+    }
+    // 正在组词/表情面板时不动面板，随后的 updateInputPanel 自然会盖掉。
+    if (!state->composing() && !state->emojiPanel_) {
+        updateInputPanel(ic, state);
+    }
+}
+
+void WowtypeEngine::commitPrediction(fcitx::InputContext *ic, WowtypeState *state,
+                                     const std::string &word) {
+    if (!ic || word.empty()) {
+        return;
+    }
+    state->predictions_.clear();
+    // commitPlain → rememberContext → showPredictions：上屏这个词，接着联想下一个（链式）。
+    commitPlain(ic, word);
+    updateInputPanel(ic, state);
+}
+
 void WowtypeEngine::commitPlain(fcitx::InputContext *ic, const std::string &text) {
     if (!ic || text.empty()) {
         return;
     }
     emit(ic, text);
     rememberContext(text);
+    // 上屏后顺势联想下一个词（Predict 关掉时只是清空，不影响别的）。
+    if (auto *state = ic->propertyFor(&factory_)) {
+        showPredictions(ic, state);
+    }
 }
 
 void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
@@ -1119,6 +1177,10 @@ void WowtypeEngine::finishCommit(fcitx::InputContext *ic, WowtypeState *state,
     state->clear();
     if (learned || !text.empty()) {
         rememberContext(text);
+        // 上屏后顺势联想下一个词（Predict 关掉时只是清空，不影响别的）。
+            if (auto *state = ic->propertyFor(&factory_)) {
+                showPredictions(ic, state);
+            }
     }
     if (learned) {
         maybeSaveUserDict(false);
@@ -1761,6 +1823,25 @@ void WowtypeEngine::updateInputPanel(fcitx::InputContext *ic,
         return;
     }
 
+    if (!state->composing()) {
+        // 联想词：不组词时占住候选条，点选或数字键直接上屏。
+        if (state->predicting()) {
+            auto candidates = std::make_unique<fcitx::CommonCandidateList>();
+            candidates->setLayoutHint(horizontal_
+                                          ? fcitx::CandidateLayoutHint::Horizontal
+                                          : fcitx::CandidateLayoutHint::Vertical);
+            candidates->setPageSize(static_cast<int>(
+                std::max<std::size_t>(state->predictions_.size(), 1)));
+            for (const auto &word : state->predictions_) {
+                candidates->append<WowtypePredictWord>(this, state, word);
+            }
+            panel.setCandidateList(std::move(candidates));
+        }
+        ic->updatePreedit();
+        ic->updateUserInterface(fcitx::UserInterfaceComponent::InputPanel);
+        return;
+    }
+
     const bool translate = translating(ic) && translator_;
     if (!state->composing()) {
         if (translate && !state->tsource_.empty()) {
@@ -2173,6 +2254,33 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
             return;
         }
     } else {
+        if (state->predicting()) {
+            // 主排数字选联想词（小键盘放行给应用输数字）；空格/回车/移动键收起放行。
+            if (key.isDigit() && !key.isKeyPad()) {
+                const int digit = key.digit();
+                if (auto list = ic->inputPanel().candidateList();
+                    list && digit >= 1 &&
+                    static_cast<std::size_t>(digit) <= list->size()) {
+                    list->candidate(digit - 1).select(ic);
+                    event.filterAndAccept();
+                    return;
+                }
+            } else if (sym == FcitxKey_Escape) {
+                state->predictions_.clear();
+                updateInputPanel(ic, state);
+                event.filterAndAccept();
+                return;
+            } else if (sym == FcitxKey_space || sym == FcitxKey_Return ||
+                       sym == FcitxKey_KP_Enter || sym == FcitxKey_BackSpace ||
+                       sym == FcitxKey_Tab || key.isCursorMove()) {
+                state->predictions_.clear();
+                updateInputPanel(ic, state);
+                return;
+            } else {
+                state->predictions_.clear();
+                updateInputPanel(ic, state);
+            }
+        }
         // 汉字后面直接打数字（第5章）：要补空格就自己上屏，否则照常交给应用
         if (key.isDigit() && autoSpaceKey(ic, key)) {
             event.filterAndAccept();
