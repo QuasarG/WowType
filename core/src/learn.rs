@@ -82,6 +82,23 @@ impl UserPairs {
         removed
     }
 
+    /// prev 学到的全部搭配后继及其加分（按加分降序），给预测合并用。
+    pub fn successors_ranked(&self, prev: &str, at_ms: u64) -> Vec<(&str, f64)> {
+        let Some(next) = self.map.get(prev) else {
+            return Vec::new();
+        };
+        let mut out: Vec<(&str, f64)> = next
+            .iter()
+            .map(|(cur, _)| (cur.as_str(), self.bonus(prev, cur, at_ms)))
+            .collect();
+        out.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(b.0))
+        });
+        out
+    }
+
     pub fn len(&self) -> usize {
         self.map.values().map(HashMap::len).sum()
     }
@@ -126,7 +143,31 @@ impl LanguageModel for LearnedLm<'_> {
     }
 
     fn top_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
-        self.base.top_next(prev, limit)
+        // 通用后继多取一些打底，再叠加用户学到的搭配加分：
+        // 老词会被私人习惯翻上来，词表里没有的搭配也会补进来。
+        let fetch = limit.saturating_mul(2).max(limit + 8);
+        let mut items: Vec<(String, f64)> = self.base.top_next(prev, fetch).into_iter().collect();
+        let mut index: HashMap<String, usize> = items
+            .iter()
+            .enumerate()
+            .map(|(i, (word, _))| (word.clone(), i))
+            .collect();
+        for (cur, bonus) in self.pairs.successors_ranked(prev, self.at_ms) {
+            match index.get(cur) {
+                Some(&i) => items[i].1 += bonus,
+                None => {
+                    index.insert(cur.to_string(), items.len());
+                    items.push((cur.to_string(), bonus));
+                }
+            }
+        }
+        items.sort_by(|a, b| {
+            b.1.partial_cmp(&a.1)
+                .unwrap_or(std::cmp::Ordering::Equal)
+                .then_with(|| a.0.cmp(&b.0))
+        });
+        items.truncate(limit);
+        items
     }
 }
 
@@ -213,6 +254,32 @@ pub fn load_history<P: AsRef<Path>>(
 mod tests {
     use super::*;
     use crate::lm::BigramLm;
+
+    #[test]
+    fn top_next_merges_user_pairs_into_base() {
+        // 基础模型只懂「我→是/在」；用户学过「我→的」「我→刚」。
+        // 预测应把学过的词排到通用候选前面，并补进基础模型没有的「刚」。
+        let lm = BigramLm::from_bigram_tsv_str("我\t是\t10\n我\t在\t5\n").unwrap();
+        let mut pairs = UserPairs::default();
+        let now = 1_000_000u64;
+        pairs.learn("我", "的", now);
+        pairs.learn("我", "刚", now);
+        let learned = LearnedLm {
+            base: &lm,
+            pairs: &pairs,
+            start: None,
+            at_ms: now,
+        };
+        let top = learned.top_next("我", 3);
+        assert_eq!(top.len(), 3);
+        // 学过的两个搭配带加分，必须都在前二。
+        let rank: Vec<&str> = top.iter().map(|(w, _)| w.as_str()).collect();
+        assert!(rank.contains(&"的") && rank.contains(&"刚"));
+        assert!(rank.iter().position(|w| *w == "的").unwrap() < 2);
+        assert!(rank.iter().position(|w| *w == "刚").unwrap() < 2);
+        // 没学过也没统计的 prev 预测为空。
+        assert!(learned.top_next("桌子", 5).is_empty());
+    }
 
     #[test]
     fn heat_decays_with_half_life() {

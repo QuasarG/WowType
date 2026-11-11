@@ -639,8 +639,19 @@ impl Engine {
     /// 基于上一词的候选预测（「预测词库」）。
     ///
     /// 返回 (词, 对数概率)，按概率降序。语言模型没接入预测能力时返回空。
+    /// 预测也走学习层：通用搭配打底，叠加用户的私人习惯。
     pub fn predict_next(&self, prev: &str, limit: usize) -> Vec<(String, f64)> {
-        self.lm.top_next(prev, limit)
+        let pairs = match self.pairs.read() {
+            Ok(pairs) => pairs,
+            Err(_) => return self.lm.top_next(prev, limit),
+        };
+        let lm = LearnedLm {
+            base: self.lm.as_ref(),
+            pairs: &pairs,
+            start: None,
+            at_ms: now_ms(),
+        };
+        lm.top_next(prev, limit)
     }
 
     pub fn input(&self, raw: &str) -> Vec<Candidate> {
