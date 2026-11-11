@@ -185,6 +185,22 @@ pub struct Engine {
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
 }
 
+/// l/n 后的 ue 即 üe：lüe/nüe 在键盘上常打作 lue/nue（正词法难敲 ü），
+/// 主流输入法都收这对弱拼写。改写是纯字母替换，隔音符不受影响。
+fn expand_weak_v_inplace(s: &mut String) {
+    if s.contains("lue") || s.contains("nue") {
+        *s = s.replace("lue", "lve").replace("nue", "nve");
+    }
+}
+
+/// l/n 后的 ue 即 üe：lüe/nüe 在键盘上常打作 lue/nue（正词法难敲 ü），
+/// 主流输入法都收这对弱拼写。改写是纯字母替换，隔音符不受影响。
+fn expand_weak_v_inplace(s: &mut String) {
+    if s.contains("lue") || s.contains("nue") {
+        *s = s.replace("lue", "lve").replace("nue", "nve");
+    }
+}
+
 impl Engine {
     pub fn new(lexicon: Arc<dyn Lexicon>, lm: Arc<dyn LanguageModel>) -> Self {
         let merged = Arc::new(UserLexicon::new(lexicon.clone()));
@@ -642,6 +658,9 @@ impl Engine {
     }
 
     pub fn try_input_at(&self, raw: &str, at_ms: u64) -> Result<Vec<Candidate>> {
+        let display = raw.trim();
+        let normalized = display.to_ascii_lowercase();
+
         let mut result = if self.config.shuangpin {
             self.shuangpin_candidates(raw, at_ms)?
         } else {
@@ -752,7 +771,9 @@ impl Engine {
         at_ms: u64,
     ) -> Result<Vec<Candidate>> {
         let display = raw.trim();
-        let normalized = display.to_ascii_lowercase();
+        let mut normalized = display.to_ascii_lowercase();
+        // 全拼的弱拼写形式：l/n 后的 ue 是 üe（lue→lve、nue→nve）。
+        expand_weak_v_inplace(&mut normalized);
         let mut result = self.query_plain(&normalized, at_ms)?;
 
         protect_exact_input(&mut result);
@@ -3102,5 +3123,26 @@ mod tests {
         let cands = e.input("xian");
         assert!(!cands.is_empty());
         assert_eq!(cands[0].features.ltr_valid, 1.0);
+    }
+}
+
+#[cfg(test)]
+mod weak_v_tests {
+    #[test]
+    fn lue_nue_map_to_ve() {
+        let mut s = String::from("lue");
+        super::expand_weak_v_inplace(&mut s);
+        assert_eq!(s, "lve");
+        let mut s = String::from("nue");
+        super::expand_weak_v_inplace(&mut s);
+        assert_eq!(s, "nve");
+        // 整句里的位置无关：忽略 → hulve
+        let mut s = String::from("hulue");
+        super::expand_weak_v_inplace(&mut s);
+        assert_eq!(s, "hulve");
+        // 其他字母组合不受影响
+        let mut s = String::from("xi'an");
+        super::expand_weak_v_inplace(&mut s);
+        assert_eq!(s, "xi'an");
     }
 }
