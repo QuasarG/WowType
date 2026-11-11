@@ -175,6 +175,12 @@ WowtypeCandidates *wowtype_engine_predict_next(const WowtypeEngineHandle *engine
 WowtypeCandidates *wowtype_engine_predict_from_context(const WowtypeEngineHandle *engine,
                                                         size_t limit);
 
+/**
+ * 载入知意 Laya 神经预测器（目录：model.safetensors / config.json / next_rows.json /
+ * tokenizer.json）。返回 zh 行数，失败返回 -1（用 wowtype_last_error 取原因）。
+ */
+int wowtype_engine_load_laya(WowtypeEngineHandle *engine, const char *dir);
+
 /* 候选数量。 */
 size_t wowtype_candidates_len(const WowtypeCandidates *candidates);
 

@@ -17,6 +17,7 @@ pub mod learn;
 pub mod lexicon;
 pub mod llama;
 pub mod lm;
+pub mod laya;
 pub mod nnlm;
 pub mod preedit;
 pub mod rank;
@@ -183,6 +184,7 @@ pub struct Engine {
     english: RwLock<Arc<HashMap<String, String>>>,
     /// 字级神经语言模型（微信输入法的 nlrgpt2，本机有才加载），给整句候选重排。
     nnlm: RwLock<Option<Arc<nnlm::Nnlm>>>,
+    laya: RwLock<Option<Arc<laya::Laya>>>,
 }
 
 /// l/n 后的 ue 即 üe：lüe/nüe 在键盘上常打作 lue/nue（正词法难敲 ü），
@@ -210,6 +212,7 @@ impl Engine {
             converter: RwLock::new(Arc::new(Converter::new())),
             english: RwLock::new(Arc::new(HashMap::new())),
             nnlm: RwLock::new(None),
+            laya: RwLock::new(None),
         }
     }
 
@@ -220,6 +223,17 @@ impl Engine {
         let size = model.vocab_size();
         self.set_nnlm(Some(Arc::new(model)));
         Ok(size)
+    }
+
+    /// 载入知意 Laya 神经预测器（目录含 model.safetensors / config / next_rows /
+    /// tokenizer）。返回 zh 行数；失败不影响其余功能。
+    pub fn load_laya<P: AsRef<std::path::Path>>(&self, dir: P) -> Result<usize> {
+        let model = laya::Laya::load_dir(dir.as_ref())?;
+        let rows = model.zh_row_count();
+        if let Ok(mut slot) = self.laya.write() {
+            *slot = Some(Arc::new(model));
+        }
+        Ok(rows)
     }
 
     pub fn set_nnlm(&self, model: Option<Arc<nnlm::Nnlm>>) {
@@ -680,6 +694,30 @@ impl Engine {
     /// 没有可靠的末词时（比如焦点落到已有文本中间），退而从上下文
     /// 尾部按词表认一个最长后缀词；刚上屏标点、上下文对不上则返回空。
     pub fn predict_from_context(&self, limit: usize) -> Vec<(String, f64)> {
+        // 神经预测器（zhiyi Laya）优先：直接读光标前的整段尾部上下文生成下一词。
+        if let Some(model) = self.laya.read().ok().and_then(|s| s.clone()) {
+            let words = model.predict_text(&self.context(), limit.min(6));
+            if !words.is_empty() {
+                // 学习层的搭配补满剩下的位置（去重）
+                let prev = match self.start_word() {
+                    Some(prev) => Some(prev),
+                    None => self.lm.suffix_word(&self.context()),
+                };
+                if let Some(prev) = prev {
+                    for (word, score) in self.predict_next(&prev, limit) {
+                        if words.len() >= limit {
+                            break;
+                        }
+                        if !words.iter().any(|(w, _)| *w == word) {
+                            let mut w = words.clone();
+                            w.push((word, score));
+                            return w;
+                        }
+                    }
+                }
+                return words;
+            }
+        }
         let prev = match self.start_word() {
             Some(prev) => Some(prev),
             None => self.lm.suffix_word(&self.context()),

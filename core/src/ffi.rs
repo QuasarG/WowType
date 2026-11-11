@@ -538,6 +538,29 @@ pub unsafe extern "C" fn wowtype_engine_load_nnlm(
     }
 }
 
+/// 载入知意 Laya 神经预测器（目录：model.safetensors 等）。返回 zh 行数，失败返回 -1。
+#[no_mangle]
+pub unsafe extern "C" fn wowtype_engine_load_laya(
+    engine: *mut WowtypeEngineHandle,
+    dir: *const c_char,
+) -> c_int {
+    if engine.is_null() {
+        set_last_error("engine is null");
+        return -1;
+    }
+    let Some(dir) = (unsafe { cstr_to_str(dir) }) else {
+        set_last_error("dir is null or not utf8");
+        return -1;
+    };
+    match unsafe { &*engine }.engine.load_laya(dir) {
+        Ok(n) => n.min(c_int::MAX as usize) as c_int,
+        Err(e) => {
+            set_last_error(format!("{e:#}"));
+            -1
+        }
+    }
+}
+
 /// 开关模糊音（z/zh、an/ang 等）。返回 0 成功，-1 失败。
 #[no_mangle]
 pub unsafe extern "C" fn wowtype_engine_set_fuzzy(

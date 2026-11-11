@@ -300,6 +300,31 @@ WowtypeEngineHandle *loadCore(const std::string &userDict, std::string lexicon) 
                          << (wowtype_last_error() ? wowtype_last_error() : "unknown");
         }
     }
+    // 知意 Laya 神经预测器（不随 WowType 分发，本机有才用）：
+    // WOWTYPE_LAYA_DIR 指定目录，否则用户数据目录的 zhiyi/zhen-mini。
+    {
+        std::string layaDir;
+        if (const char *env = std::getenv("WOWTYPE_LAYA_DIR"); env && *env) {
+            layaDir = env;
+        } else {
+            const std::string base = userDataDir();
+            if (!base.empty()) {
+                layaDir = base + "/zhiyi/zhen-mini";
+            }
+        }
+        std::error_code ec;
+        if (!layaDir.empty() &&
+            std::filesystem::exists(layaDir + "/model.safetensors", ec)) {
+            const int loaded = wowtype_engine_load_laya(core, layaDir.c_str());
+            if (loaded > 0) {
+                WLOG_I() << "WowType: 载入 Laya 神经预测器（" << loaded << " 行）"
+                             << "，联想走神经生成";
+            } else {
+                WLOG_W() << "WowType: Laya 预测器载入失败 " << layaDir << "："
+                             << (wowtype_last_error() ? wowtype_last_error() : "unknown");
+            }
+        }
+    }
     if (!userDict.empty()) {
         const int loaded = wowtype_engine_load_user_dict(core, userDict.c_str());
         if (loaded > 0) {
