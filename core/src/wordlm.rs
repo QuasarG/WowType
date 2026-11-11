@@ -152,6 +152,26 @@ impl LanguageModel for WordLm {
         items.truncate(limit);
         items
     }
+
+    fn suffix_word(&self, text: &str) -> Option<String> {
+        // 光标处联想：取尾部连续汉字（最多 8 字），从最长后缀开始对词表。
+        let run: Vec<char> = text
+            .chars()
+            .rev()
+            .take_while(|c| matches!(*c as u32, 0x3400..=0x9FFF | 0xF900..=0xFAFF))
+            .take(8)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        for len in (1..=run.len()).rev() {
+            let cand: String = run[run.len() - len..].iter().collect();
+            if self.ids.contains_key(&cand) {
+                return Some(cand);
+            }
+        }
+        None
+    }
 }
 
 struct Reader<'a> {

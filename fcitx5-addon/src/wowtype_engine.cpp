@@ -2255,8 +2255,8 @@ void WowtypeEngine::keyEvent(const fcitx::InputMethodEntry & /*entry*/,
         }
     } else {
         if (state->predicting()) {
-            // 主排数字选联想词（小键盘放行给应用输数字）；空格/回车/移动键收起放行。
             if (key.isDigit() && !key.isKeyPad()) {
+                // 主排数字选联想词；小键盘数字放行给应用（输数字不打断）。
                 const int digit = key.digit();
                 if (auto list = ic->inputPanel().candidateList();
                     list && digit >= 1 &&
@@ -2321,6 +2321,18 @@ void WowtypeEngine::activate(const fcitx::InputMethodEntry & /*entry*/,
     coreReady();
     sampleClipboard(ic);
     maybeCheckUpdate();
+    // 光标处联想：焦点进来时光标周围已有文字（应用需支持 surrounding
+    // text），把上下文对齐过去，直接给下一词的联想——不用先打一个字。
+    if (predict_ && core_ &&
+        ic->capabilityFlags().test(fcitx::CapabilityFlag::SurroundingText) &&
+        ic->surroundingText().isValid()) {
+        const std::string &text = ic->surroundingText().text();
+        if (!text.empty()) {
+            recent_ = utf8Tail(text, kContextBytes);
+            wowtype_engine_set_context(core_, recent_.c_str());
+            showPredictions(ic, ic->propertyFor(&factory_));
+        }
+    }
 }
 
 /// 后台的小事交给设置界面（wowtype-config --startup）：第一次用时打开 WowType 主题、

@@ -38,6 +38,12 @@ pub trait LanguageModel: Send + Sync {
     fn top_next(&self, _prev: &str, _limit: usize) -> Vec<(String, f64)> {
         Vec::new()
     }
+
+    /// 从任意文本的尾部认出模型词表里的最后一个词（光标处联想用）。
+    /// 没有词表的实现返回 None。
+    fn suffix_word(&self, _text: &str) -> Option<String> {
+        None
+    }
 }
 
 /// 内存二元语言模型。

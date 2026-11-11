@@ -676,10 +676,15 @@ impl Engine {
 
     /// 用最近上屏的内容预测下一词（联想）。
     ///
-    /// 引擎自己取光标前的末词做 prev（整句上屏取它的末词，如「我发给你」→「你」）；
-    /// 刚上屏的是标点、或上下文对不上时返回空。
+    /// 引擎自己取光标前的末词做 prev（整句上屏取分词后的末词）；
+    /// 没有可靠的末词时（比如焦点落到已有文本中间），退而从上下文
+    /// 尾部按词表认一个最长后缀词；刚上屏标点、上下文对不上则返回空。
     pub fn predict_from_context(&self, limit: usize) -> Vec<(String, f64)> {
-        match self.start_word() {
+        let prev = match self.start_word() {
+            Some(prev) => Some(prev),
+            None => self.lm.suffix_word(&self.context()),
+        };
+        match prev {
             Some(prev) => self.predict_next(&prev, limit),
             None => Vec::new(),
         }
